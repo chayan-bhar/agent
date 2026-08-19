@@ -1,0 +1,99 @@
+# Environment & Secrets (NEVER commit secrets)
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python / Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# Package managers / caches
+.uv/
+uv.lock
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# Type Checkers & Linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Databases & Cache Persistence
+*.db
+*.sqlite
+*.sqlite3
+postgres_data/
+redis_data/
+dump.rdb
+
+# Logs & Output Reports
+*.log
+logs/
+reports/*.pdf
+reports/*.html
+
+# Docker Local Overrides
+docker-compose.override.yml
+
+# Archive / Compression
+*.tar.gz
+*.zip
+*.whl
+*.tar
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb

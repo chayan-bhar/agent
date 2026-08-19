@@ -1,0 +1,208 @@
+"""
+LangGraph State Definition.
+
+The RepositoryAnalysisState TypedDict is the single source of truth for
+all data that flows through the LangGraph workflow. Every node reads from
+and writes to this state.
+
+Design principles:
+- All fields must be JSON-serializable (required for LangGraph checkpointing).
+- Optional fields are typed as Optional[X] and default to None.
+- Lists default to empty lists, dicts default to empty dicts.
+- The state grows monotonically — nodes only ADD data, never delete.
+- Errors and warnings are accumulated lists, not terminal states.
+"""
+from __future__ import annotations
+
+from typing import Annotated, Any, Optional
+
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
+
+
+# ── Sub-state types ───────────────────────────────────────────────────────────
+
+
+class RepositoryMetadata(TypedDict, total=False):
+    """Metadata fetched from the GitHub API during discovery."""
+
+    name: str
+    full_name: str
+    description: Optional[str]
+    default_branch: str
+    primary_language: Optional[str]
+    languages: dict[str, int]           # lang → bytes
+    topics: list[str]
+    size_kb: int
+    stars: int
+    forks: int
+    license: Optional[str]
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    html_url: str
+    has_ci: bool                        # .github/workflows present
+    has_docker: bool                    # Dockerfile or docker-compose present
+    has_kubernetes: bool                # k8s/ or helm/ present
+    has_tests: bool                     # tests/ or test/ present
+
+
+class FileEntry(TypedDict):
+    """A single file in the repository tree."""
+
+    path: str
+    size_bytes: int
+    priority: str                       # CRITICAL | HIGH | MEDIUM | LOW
+    priority_reason: str
+
+
+class Finding(TypedDict, total=False):
+    """
+    A single analysis finding from any specialized analyzer.
+
+    Used by security, performance, and code quality analyzers.
+    """
+
+    title: str
+    description: str
+    severity: str                       # CRITICAL | HIGH | MEDIUM | LOW | INFO
+    category: str                       # e.g. SECURITY, PERFORMANCE, QUALITY
+    confidence: str                     # HIGH | MEDIUM | LOW
+    finding_type: str                   # CONFIRMED | POTENTIAL | RECOMMENDATION
+    evidence_files: list[str]           # List of file paths as evidence
+    evidence_snippet: Optional[str]     # Relevant code snippet
+    recommendation: str
+    impact: str
+
+
+class Recommendation(TypedDict, total=False):
+    """A prioritized improvement recommendation from the Improvement Planner."""
+
+    title: str
+    description: str
+    priority: str                       # CRITICAL | HIGH | MEDIUM | LOW
+    category: str                       # PERFORMANCE | SECURITY | QUALITY | ARCHITECTURE | etc.
+    impact: str
+    effort: str                         # HIGH | MEDIUM | LOW
+    files: list[str]
+    suggested_solution: str
+    related_findings: list[str]
+
+
+class WorkflowError(TypedDict):
+    """A recoverable error recorded during workflow execution."""
+
+    node: str
+    error_type: str
+    message: str
+    timestamp: str
+    retried: bool
+
+
+class ApprovalFeedback(TypedDict, total=False):
+    """Human feedback from the HITL approval step."""
+
+    action: str                         # APPROVE | REJECT | REQUEST_REVISION
+    feedback_text: Optional[str]
+    timestamp: str
+    revision_instructions: Optional[str]
+
+
+# ── Main State ────────────────────────────────────────────────────────────────
+
+
+class RepositoryAnalysisState(TypedDict, total=False):
+    """
+    Complete state for a single repository analysis workflow.
+
+    This TypedDict is the contract between all LangGraph nodes.
+    All fields are optional (total=False) so nodes can be added
+    incrementally without breaking existing workflows.
+
+    Serialization:
+        LangGraph's PostgreSQL checkpointer serializes this via JSON.
+        Keep all values JSON-serializable (no datetime objects, no sets).
+    """
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    analysis_id: str
+    repository_url: str
+    repository_name: str                # "<owner>/<repo>"
+    owner: str
+    repo: str
+
+    # ── Discovery outputs ─────────────────────────────────────────────────────
+    repository_metadata: RepositoryMetadata
+    file_tree: list[FileEntry]          # Filtered, scored file list
+    relevant_files: list[FileEntry]     # Top files selected for LLM analysis
+    file_contents: dict[str, str]       # path → decoded content
+
+    # ── Analysis outputs ──────────────────────────────────────────────────────
+    repository_summary: dict[str, Any]
+    architecture_analysis: dict[str, Any]
+    security_analysis: dict[str, Any]
+    performance_analysis: dict[str, Any]
+    code_quality_analysis: dict[str, Any]
+
+    # ── Mermaid diagrams (generated by architecture analyzer) ─────────────────
+    architecture_diagram: Optional[str]
+    data_flow_diagram: Optional[str]
+
+    # ── Improvement planning ──────────────────────────────────────────────────
+    improvement_recommendations: list[Recommendation]
+
+    # ── Report ────────────────────────────────────────────────────────────────
+    final_report: Optional[str]         # Markdown report content
+    report_metadata: dict[str, Any]     # Sections, word count, generation time
+
+    # ── Human-in-the-loop ─────────────────────────────────────────────────────
+    approval_status: str                # PENDING | APPROVED | REJECTED | REVISION_REQUESTED
+    approval_feedback: Optional[ApprovalFeedback]
+    revision_count: int                 # Number of revision cycles completed
+
+    # ── Workflow control ──────────────────────────────────────────────────────
+    current_node: str
+    completed_nodes: list[str]
+
+    # ── Error tracking ────────────────────────────────────────────────────────
+    errors: list[WorkflowError]
+    warnings: list[str]
+
+
+# ── State initialization helper ───────────────────────────────────────────────
+
+
+def initial_state(
+    analysis_id: str,
+    repository_url: str,
+    owner: str,
+    repo: str,
+) -> RepositoryAnalysisState:
+    """Create a fresh initial state for a new analysis."""
+    return RepositoryAnalysisState(
+        analysis_id=analysis_id,
+        repository_url=repository_url,
+        repository_name=f"{owner}/{repo}",
+        owner=owner,
+        repo=repo,
+        repository_metadata={},
+        file_tree=[],
+        relevant_files=[],
+        file_contents={},
+        repository_summary={},
+        architecture_analysis={},
+        security_analysis={},
+        performance_analysis={},
+        code_quality_analysis={},
+        architecture_diagram=None,
+        data_flow_diagram=None,
+        improvement_recommendations=[],
+        final_report=None,
+        report_metadata={},
+        approval_status="PENDING",
+        approval_feedback=None,
+        revision_count=0,
+        current_node="start",
+        completed_nodes=[],
+        errors=[],
+        warnings=[],
+    )

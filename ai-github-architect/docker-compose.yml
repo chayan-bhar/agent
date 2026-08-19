@@ -1,0 +1,129 @@
+services:
+  # ── FastAPI Application ───────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: ai-github-architect-api
+    ports:
+      - "8000:8000"
+    environment:
+      # App
+      APP_ENV: development
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      APP_DEBUG: "true"
+      APP_LOG_LEVEL: INFO
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-secret-change-in-production}
+
+      # LLM
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+
+      # GitHub
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+      # Database
+      DATABASE_URL: postgresql+asyncpg://architect:architect_dev@postgres:5432/ai_github_architect
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ai_github_architect
+      POSTGRES_USER: architect
+      POSTGRES_PASSWORD: architect_dev
+
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+      # LangSmith (optional)
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-ai-github-architect}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Hot-reload in development (comment out for production)
+      - ./app:/app/app:ro
+      - ./migrations:/app/migrations:ro
+    restart: unless-stopped
+    networks:
+      - architect-network
+
+  # ── GitHub MCP Server ─────────────────────────────────────────────────────
+  mcp-github:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: ai-github-architect-mcp
+    command: ["python", "-m", "app.mcp.github_server.server"]
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      APP_LOG_LEVEL: INFO
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    volumes:
+      - ./app:/app/app:ro
+    restart: unless-stopped
+    networks:
+      - architect-network
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-github-architect-postgres
+    environment:
+      POSTGRES_DB: ai_github_architect
+      POSTGRES_USER: architect
+      POSTGRES_PASSWORD: architect_dev
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U architect -d ai_github_architect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - architect-network
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  # Used for:
+  # 1. Caching GitHub API responses (TTL: 1 hour) — avoids rate limits
+  # 2. Caching expensive LLM structured outputs (TTL: 24 hours)
+  # 3. Future: job queue coordination
+  redis:
+    image: redis:7-alpine
+    container_name: ai-github-architect-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - architect-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  architect-network:
+    driver: bridge
